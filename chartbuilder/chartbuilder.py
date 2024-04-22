@@ -1,13 +1,19 @@
 import json
 import boto3
 from datetime import datetime, timedelta
-from song_stemmer import key_builder
 import pandas as pd
-import io
+
 
 
 START_DATE = datetime.now() 
 dynamodb = boto3.resource('dynamodb')
+s3_client = boto3.client("s3")
+
+def get_days(days_to_process):
+    date_list = [] 
+    for n in range(days_to_process):
+        date_list.append(datetime.strftime((START_DATE - timedelta(n)), '%m-%d-%Y'))
+    return date_list
 
 def fmt_response(status_code, body):  
     return {
@@ -20,50 +26,29 @@ def fmt_response(status_code, body):
         'body':  body
     }
 
-def get_days(days_to_process):
-    date_list = [] 
-    for n in range(days_to_process):
-        date_list.append(datetime.strftime((START_DATE - timedelta(n)), '%m-%d-%Y'))
-    return date_list
+def process_city(df, city):
+    print(city)
 
-
-def get_list(city, date):
-    client = boto3.client('s3', region_name='us-west-2')
-    paginator = client.get_paginator('list_objects_v2')
-
-
-    s3 = boto3.resource('s3')
-    song_list = {}
-
-    page_iterator = paginator.paginate(Bucket='tracks.json',
-            Prefix="tracks/" + city + "/"+ date + "/") # only this city
-    for page in page_iterator:
-
-        # Aggregate the bucket
-        print('Aggregating songs....:' + date)
-        try:
-            for obj in page['Contents']:
-                song_bucket = obj['Key']
-            
-                track = s3.Object('tracks.json', song_bucket)
-                
-                song = json.loads(track.get()['Body'].read())
-                #print(song)
-
-                # Get the songs hash key
-                key = key_builder( song['song'] + ' ' + song['band'])
-
-                # Creat a list of occurances of the song.
-                if key in song_list :
-                    song_list[key][0] = song_list[key][0] + 1
-                else:
-                    song_list.update({key: [1, song['song'], song['band'], key, city, date]})
-        except KeyError as err:
-            print('Error: ' + str(err)) 
-    return song_list
-
+def process_global(df):
+    print('global')
+    
 def handler(event, context):
     print(pd.__version__)
+
+    # Aggregate N days of stats as df
+    days = get_days(2)
+    
+    print('Processing days ... ' + str(days))
+    
+    df = pd.DataFrame()
+    for date in days:
+        object_key = date + "/aggregated-daily.json"
+        file_content = s3_client.get_object(
+            Bucket='daily-statistics', Key=object_key)
+        df = pd.concat([df, pd.read_json(file_content['Body'])])
+        print(df)
+        
+        
 
     # loop through cities
     dyanamodb = boto3.resource('dynamodb')
@@ -72,25 +57,15 @@ def handler(event, context):
     cities = [] # Get cities to process from DynamoDB Stations table.
     cities.extend(stations.get("Items", []))
 
+    for city in cities:
+        print('Processing: ' + city['City'].replace(' ', '') + ' ...')
+
+        # Pass df and city to city builder
+        # process_city(df, city)
+        
+    print('Processing: global ...')     
+    #process_global(df)    
+    return fmt_response(200, 'processed')
 
 
-    global_list = {}
-    days = get_days(1)
-    for day in days:
-        combined_df = pd.DataFrame()
-        for city in cities:
-            print('Processing: ' + city['City'].replace(' ', '') + ' ...')
-            song_list = get_list(city['City'].replace(' ', ''),day)
-            df = pd.DataFrame(song_list.values())
-            combined_df = pd.concat([combined_df, df])
-            print(df)
-        #Save todays bucket    
-        combined_df.columns = ['count', 'song', 'artist', 'key', 'city', 'date']
-        bucket = 'daily-statistics'
-        destination = day + '/aggregated-daily.json'
-        json_buffer = io.StringIO()
-        combined_df.to_json(json_buffer,orient='records')
-        s3 = boto3.resource('s3')
-        s3_bucket = s3.Bucket(bucket)
-        s3_bucket.put_object(Key=destination, Body=json_buffer.getvalue())
-        return fmt_response(200, 'processed')
+handler('','')

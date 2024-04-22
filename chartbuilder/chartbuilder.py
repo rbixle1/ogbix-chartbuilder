@@ -26,17 +26,21 @@ def fmt_response(status_code, body):
         'body':  body
     }
 
-def process_city(df, city):
-    print(city)
+def process_dataframe(df):
+    print(df)
+    df['song']= df['song'].str.title()
+    df['artist']= df['artist'].str.title()
+    local_df = df.groupby(['key', 'song', 'artist']).sum(['count']).reset_index()
+    local_df = local_df.sort_values(by=['count'], ascending=False).head(100)
 
-def process_global(df):
-    print('global')
+    print(local_df)
+
     
 def handler(event, context):
     print(pd.__version__)
 
     # Aggregate N days of stats as df
-    days = get_days(2)
+    days = get_days(5)
     
     print('Processing days ... ' + str(days))
     
@@ -58,13 +62,14 @@ def handler(event, context):
     cities.extend(stations.get("Items", []))
 
     for city in cities:
-        print('Processing: ' + city['City'].replace(' ', '') + ' ...')
+        city_name = city['City'].replace(' ', '')
+        print('Processing: ' + city_name + ' ...')
 
         # Pass df and city to city builder
-        # process_city(df, city)
+        process_dataframe(df.loc[df['city'] == city_name])
         
     print('Processing: global ...')     
-    #process_global(df)    
+    process_dataframe(df)    
     return fmt_response(200, 'processed')
 
 

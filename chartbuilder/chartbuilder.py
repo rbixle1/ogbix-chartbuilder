@@ -5,9 +5,10 @@ import pandas as pd
 
 
 
-START_DATE = datetime.now() 
+START_DATE = datetime.now() - timedelta(1)
 dynamodb = boto3.resource('dynamodb')
 s3_client = boto3.client("s3")
+city_chart = dynamodb.Table('Charts')
 
 def get_days(days_to_process):
     date_list = [] 
@@ -26,19 +27,25 @@ def fmt_response(status_code, body):
         'body':  body
     }
 
-def process_dataframe(df):
-    print(df)
-    df['song']= df['song'].str.title()
-    df['artist']= df['artist'].str.title()
-    local_df = df.groupby(['key', 'song', 'artist']).sum(['count']).reset_index()
-    local_df = local_df.sort_values(by=['count'], ascending=False).head(100)
-
-    print(local_df)
+def process_dataframe(df, city):
+    local_df = df.groupby(['key', 'song', 'artist']).sum(['count'])
+    local_df = local_df.sort_values(by=['count'], ascending=False).head(100).reset_index()
+    x = 0
+    for index, item in local_df.iterrows():
+        x = x + 1
+        response = city_chart.put_item(
+            Item={
+                'City':  city,
+                'Rank': str(x),
+                'Band': item['artist'],
+                'Song': item['song'],
+                'HashKey': item['key'],
+                'Count': str(item['count'])
+            }
+        )
 
     
 def handler(event, context):
-    print(pd.__version__)
-
     # Aggregate N days of stats as df
     days = get_days(5)
     
@@ -50,9 +57,9 @@ def handler(event, context):
         file_content = s3_client.get_object(
             Bucket='daily-statistics', Key=object_key)
         df = pd.concat([df, pd.read_json(file_content['Body'])])
-        print(df)
         
-        
+    df['song']= df['song'].str.title()
+    df['artist']= df['artist'].str.title()
 
     # loop through cities
     dyanamodb = boto3.resource('dynamodb')
@@ -65,11 +72,10 @@ def handler(event, context):
         city_name = city['City'].replace(' ', '')
         print('Processing: ' + city_name + ' ...')
 
-        # Pass df and city to city builder
-        process_dataframe(df.loc[df['city'] == city_name])
+        process_dataframe(df.loc[df['city'] == city_name], city_name)
         
     print('Processing: global ...')     
-    process_dataframe(df)    
+    process_dataframe(df, 'global')    
     return fmt_response(200, 'processed')
 
 
